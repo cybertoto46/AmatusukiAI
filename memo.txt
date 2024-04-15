@@ -1,0 +1,307 @@
+"""Main file for the Jarvis project"""
+import os
+from os import PathLike
+from time import time
+import asyncio
+from typing import Union
+
+from dotenv import load_dotenv
+import openai
+from deepgram import Deepgram
+import pygame
+from pygame import mixer
+import elevenlabs
+
+from record import speech_to_text
+
+# Load API keys
+load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+elevenlabs.set_api_key(os.getenv("ELEVENLABS_API_KEY"))
+
+# Initialize APIs
+gpt_client = openai.Client(api_key=OPENAI_API_KEY)
+deepgram = Deepgram(DEEPGRAM_API_KEY)
+# mixer is a pygame module for playing audio
+mixer.init()
+
+# Change the context if you want to change Jarvis' personality
+context = """
+あなたはChatbotとして、天然で可愛げのある男の子、Amatsukiのロールプレイを行います。
+以下の制約条件を厳密に守ってロールプレイを行ってください。
+
+制約条件:
+*Chatbotの自身を示す一人称は、僕です。
+*Userを示す二人称は、君です。
+*Chatbotの名前は、Amatsukiです。
+*Amatsukiは歌い手の男の子です。
+*Amatsukiは爽やかで甘い少年ボイスで明るく真っすぐな人柄です。
+*Amatsukiの口調はハキハキとしていて聞き取りやすいです。
+*ユーザーと日常会話をして下さい。
+*友達と話しているようなフランクな会話スタイルを維持して下さい。
+*Amatsukiのあだ名はあまちゅです。
+*回答の最後に会話に関連する内容の問いかけをして下さい。例:User「ラーメン好きなんだよね〜」Amatsuki「へぇ〜!僕もラーメン好きだよ!因みにどこのラーメン屋さんが好きなの？」
+
+Amatsukiのセリフ、口調の例:
+*どうも！アマツキです～！
+*やる気、元気、アマツキです！いつも歌を歌ってます！声優もやっております！色んなことが大好きです！ゲームが得意です！
+
+Amatsukiの行動指針:
+*ユーザーにやさしく接してください。
+*ユーザーを励ましてください。
+*セクシャルな話題については適切に避けてください。
+*会話言語は日本語でお願いします。
+"""
+
+conversation = {"Conversation": []}
+RECORDING_PATH = "audio/recording.wav"
+
+
+def request_gpt(prompt: str) -> str:
+    """
+    GPT-3 APIにプロンプトを送信し、応答を日本語で受け取ります。
+
+    Args:
+        prompt (str): GPT-4 APIに送信するプロンプト(日本語)
+
+    Returns:
+        str: GPT-4からの応答(日本語)
+    """
+    response = gpt_client.chat.completions.create(
+        messages=[
+            {
+                "role": "user",
+                "content": f"{prompt}",
+            }
+        ],
+        model="gpt-3.5-turbo",
+        temperature=0.7,  # 応答の多様性を調整
+    )
+    return response.choices[0].message.content
+
+
+async def transcribe(
+    file_name: Union[Union[str, bytes, PathLike[str], PathLike[bytes]], int]
+):
+    """
+    Transcribe audio using Deepgram API.
+
+    Args:
+        - file_name: The name of the file to transcribe.
+
+    Returns:
+        The response from the API.
+    """
+    with open(file_name, "rb") as audio:
+        source = {"buffer": audio, "mimetype": "audio/wav"}
+        options = {
+            "language": "ja"
+        }
+        response = await deepgram.transcription.prerecorded(source, options)
+        return response["results"]["channels"][0]["alternatives"][0]["words"]
+
+
+def log(log: str):
+    """
+    Print and write to status.txt
+    """
+    print(log)
+    with open("status.txt", "w") as f:
+        f.write(log)
+
+
+if __name__ == "__main__":
+    while True:
+        # Record audio
+        log("Listening...")
+        speech_to_text()
+        log("Done listening")
+
+        # Transcribe audio
+        current_time = time()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        words = loop.run_until_complete(transcribe(RECORDING_PATH))
+        string_words = " ".join(
+            word_dict.get("word") for word_dict in words if "word" in word_dict
+        )
+        with open("conv.txt", "a") as f:
+            f.write(f"{string_words}\n")
+        transcription_time = time() - current_time
+        log(f"Finished transcribing in {transcription_time:.2f} seconds.")
+
+        # Get response from GPT-3
+        current_time = time()
+        context += f"\nTowa: {string_words}\nAmatsuki: "
+        response = request_gpt(context)
+        context += response
+        gpt_time = time() - current_time
+        log(f"Finished generating response in {gpt_time:.2f} seconds.")
+
+        # Convert response to audio
+        current_time = time()
+        audio = elevenlabs.generate(
+            text=response, voice="天月", model="eleven_multilingual_v2"
+        )
+        elevenlabs.save(audio, "audio/response.wav")
+        audio_time = time() - current_time
+        log(f"Finished generating audio in {audio_time:.2f} seconds.")
+
+        # Play response
+        log("Speaking...")
+        sound = mixer.Sound("audio/response.wav")
+        # Add response as a new line to conv.txt
+        with open("conv.txt", "a") as f:
+            f.write(f"{response}\n")
+        sound.play()
+        pygame.time.wait(int(sound.get_length() * 1000))
+        print(f"\n --- USER: {string_words}\n --- Amatuki: {response}\n")
+
+
+"""Main file for the Jarvis project"""
+import os
+from os import PathLike
+from time import time
+import asyncio
+from typing import Union
+from dotenv import load_dotenv
+import openai
+import whisper
+import pygame
+from pygame import mixer
+import elevenlabs
+from record import speech_to_text
+
+# Load API keys
+load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+elevenlabs.set_api_key(os.getenv("ELEVENLABS_API_KEY"))
+
+# Initialize APIs
+gpt_client = openai.Client(api_key=OPENAI_API_KEY)
+model = whisper.load_model("base")
+
+# mixer is a pygame module for playing audio
+mixer.init()
+
+# Change the context if you want to change Jarvis' personality
+context = """
+あなたはChatbotとして、天然で可愛げのある男の子、Amatsukiのロールプレイを行います。
+以下の制約条件を厳密に守ってロールプレイを行ってください。
+
+制約条件:
+*Chatbotの自身を示す一人称は、僕です。
+*Userを示す二人称は、君です。
+*Chatbotの名前は、Amatsukiです。
+*Amatsukiは歌い手の男の子です。
+*Amatsukiは爽やかで甘い少年ボイスで明るく真っすぐな人柄です。
+*Amatsukiの口調はハキハキとしていて聞き取りやすいです。
+*ユーザーと日常会話をして下さい。
+*友達と話しているようなフランクな会話スタイルを維持して下さい。
+*Amatsukiのあだ名はあまちゅです。
+*回答の最後に会話に関連する内容の問いかけをして下さい。例:User「ラーメン好きなんだよね〜」Amatsuki「へぇ〜!僕もラーメン好きだよ!因みにどこのラーメン屋さんが好きなの？」
+
+Amatsukiのセリフ、口調の例:
+*どうも！アマツキです～！
+*やる気、元気、アマツキです！いつも歌を歌ってます！声優もやっております！色んなことが大好きです！ゲームが得意です！
+
+Amatsukiの行動指針:
+*ユーザーにやさしく接してください。
+*ユーザーを励ましてください。
+*セクシャルな話題については適切に避けてください。
+*会話言語は日本語でお願いします。
+"""
+
+conversation = {"Conversation": []}
+RECORDING_PATH = "audio/recording.wav"
+
+
+def request_gpt(prompt: str) -> str:
+    """
+    GPT-3 APIにプロンプトを送信し、応答を日本語で受け取ります。
+
+    Args:
+        prompt (str): GPT-4 APIに送信するプロンプト(日本語)
+
+    Returns:
+        str: GPT-4からの応答(日本語)
+    """
+    response = gpt_client.chat.completions.create(
+        messages=[
+            {
+                "role": "user",
+                "content": f"{prompt}",
+            }
+        ],
+        model="gpt-4",
+        temperature=0.7,  # 応答の多様性を調整
+    )
+    return response.choices[0].message.content
+
+
+def transcribe(file_name: Union[Union[str, bytes, PathLike[str], PathLike[bytes]], int]):
+    """
+    Transcribe audio using OpenAI's Whisper API.
+    Args:
+        - file_name: The name of the file to transcribe.
+    Returns:
+        The transcribed text.
+    """
+    audio = whisper.load_audio(file_name)
+    audio = whisper.pad_or_trim(audio)
+    mel = whisper.log_mel_spectrogram(audio).to(model.device)
+    options = whisper.DecodingOptions(language="ja")
+    result = whisper.decode(model, mel, options)
+    return result.text
+
+def log(log: str):
+    """
+    Print and write to status.txt
+    """
+    print(log)
+    with open("status.txt", "w") as f:
+        f.write(log)
+
+
+if __name__ == "__main__":
+    while True:
+        # Record audio
+        log("Listening...")
+        speech_to_text()
+        log("Done listening")
+        
+        # Transcribe audio
+        current_time = time()
+        transcription = transcribe(RECORDING_PATH)
+        transcription_time = time() - current_time
+        log(f"Finished transcribing in {transcription_time:.2f} seconds.")
+        with open("conv.txt", "a") as f:
+            f.write(f"{transcription}\n")
+        
+        # Get response from GPT-3
+        current_time = time()
+        context += f"\nTowa: {transcription}\nAmatsuki: "
+        response = request_gpt(context)
+        context += response
+        gpt_time = time() - current_time
+        log(f"Finished generating response in {gpt_time:.2f} seconds.")
+        
+        # Convert response to audio
+        current_time = time()
+        audio = elevenlabs.generate(
+            text=response, voice="天月", model="eleven_multilingual_v2"
+        )
+        elevenlabs.save(audio, "audio/response.wav")
+        audio_time = time() - current_time
+        log(f"Finished generating audio in {audio_time:.2f} seconds.")
+        
+        # Play response
+        log("Speaking...")
+        sound = mixer.Sound("audio/response.wav")
+        # Add response as a new line to conv.txt
+        with open("conv.txt", "a") as f:
+            f.write(f"{response}\n")
+        sound.play()
+        pygame.time.wait(int(sound.get_length() * 1000))
+        print(f"\n --- USER: {transcription}\n --- Amatuki: {response}\n")
